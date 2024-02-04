@@ -389,3 +389,74 @@ func FuzzDeserializationUncompressed(f *testing.F) {
 		_ = point.SetBytes(serializedpoint)
 	})
 }
+
+func BenchmarkElementDeserialization(b *testing.B) {
+	bytes, err := hex.DecodeString("26b8df6fa414bf348a3dc780ea53b70303ce49f3369212dec6fbe4b349b832bf")
+	if err != nil {
+		b.Fatal("could not decode bit string")
+	}
+	var element Element
+
+	b.Run("underlying canonical point", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = element.SetBytes(bytes)
+		}
+	})
+
+}
+
+func BenchmarkElementSerialization(b *testing.B) {
+	// Choose some random point.
+	var scalar fr.Element
+	scalar.SetUint64(0x424242)
+	point := Generator
+	point.ScalarMul(&point, &scalar)
+
+	// We check that the point is not normalized. If that isn't the case, that would be
+	// cheating the benchmark since it would save an inversion which is a costly operation
+	// we must do in real life.
+	if point.inner.Z.IsOne() {
+		b.Errorf("the point shouldn't be normalized, since that's cheating for the benchmark")
+	}
+
+	// Setup check to be sure that both benchmarks variants are measuring
+	// what we want to measure.
+	var pointAff bandersnatch.PointAffine
+	pointAff.FromProj(&point.inner)
+	if !pointAff.Y.LexicographicallyLargest() {
+		b.Fatalf("the point used for benchmarks must be representative")
+	}
+
+	// We'll benchmark the two variants of the serialization.
+	// The representative variant can be slightly faster due to not requring
+	// a finite field negation. The non-representative variant is measuring that
+	// scenario. Both scenarios can happen in real life.
+
+	b.Run("underlying canonical point", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = point.Bytes()
+		}
+	})
+
+	nonRepresentativeVariant := point.inner
+	nonRepresentativeVariant.X.Neg(&nonRepresentativeVariant.X)
+	nonRepresentativeVariant.Y.Neg(&nonRepresentativeVariant.Y)
+	nonRepresentativePoint := Element{inner: nonRepresentativeVariant}
+
+	// Sanity check.
+	if point.Bytes() != nonRepresentativePoint.Bytes() { // Note this is byte *array* equality.
+		b.Fatalf("the non-representative variant of the point must be equal to the representative one")
+	}
+
+	b.Run("underlying non-canonical point", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = nonRepresentativePoint.Bytes()
+		}
+	})
+}
